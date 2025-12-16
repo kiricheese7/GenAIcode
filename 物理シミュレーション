@@ -13,7 +13,7 @@ function doGet() {
   button { padding: 10px 20px; font-size: 16px; border: none; border-radius: 5px; cursor: pointer; background: #007bff; color: white; }
   button:active { background: #0056b3; }
   button.reset { background: #6c757d; }
-  .info { margin-top: 10px; font-size: 14px; color: #555; }
+  .info { margin-top: 10px; font-size: 14px; color: #555; font-weight: bold;}
 </style>
 </head>
 <body>
@@ -32,26 +32,24 @@ function doGet() {
   const ctx = canvas.getContext('2d');
   
   // --- パラメータ設定 ---
-  const R = 150; // 円筒の描画上の半径 (px)
-  const g = 9.8; // 重力加速度
-  const timeScale = 0.5; // スローモーション具合（数値を上げると速くなる）
+  const R = 120; // 円筒の描画上の半径 (px) 少し小さく調整
+  const g = 9.8; 
+  const timeScale = 0.6; // 少し速めに
   
-  // 原点（キャンバス上の位置）
-  const ox = canvas.width / 2;
-  const oy = canvas.height * 0.7;
+  // 配置設定
+  const floorY = canvas.height - 50; // 床のY座標
+  const ox = canvas.width / 2;       // 円の中心X座標
+  const oy = floorY - R;             // 円の中心Y座標（床の上に乗るように）
 
   // --- 状態変数 ---
   let time = 0;
   let running = false;
-  // ★修正点: 完全に0だと動かないため、微小な角度(約0.3度)から開始します
-  const INITIAL_ANGLE = 0.005; 
+  const INITIAL_ANGLE = 0.005; // スタート時の微小角度
   let angle = INITIAL_ANGLE; 
   let separated = false; 
   
-  // 分離時の情報を保存する変数
-  let sepTime = 0; 
-  let sepPos = {x:0, y:0}; 
-  let sepVel = {x:0, y:0}; 
+  // 分離時の情報
+  let sepTime = 0; let sepPos = {x:0, y:0}; let sepVel = {x:0, y:0}; 
   
   let animReq;
   let lastTime = 0;
@@ -60,7 +58,7 @@ function doGet() {
   draw();
 
   function startSim() {
-    if (!running) {
+    if (!running && !separated) { // 分離後はスタートできないように
       running = true;
       lastTime = performance.now();
       loop();
@@ -71,7 +69,7 @@ function doGet() {
     running = false;
     cancelAnimationFrame(animReq);
     time = 0;
-    angle = INITIAL_ANGLE; // 角度を初期位置に戻す
+    angle = INITIAL_ANGLE;
     separated = false;
     document.getElementById('statusText').innerText = "状態: 停止中";
     draw();
@@ -81,184 +79,174 @@ function doGet() {
     if (!running) return;
     
     const now = performance.now();
-    // 経過時間(dt)の計算。動きがカクつかないよう最大値を制限
     let dt = ((now - lastTime) / 1000) * timeScale; 
     if(dt > 0.05) dt = 0.05; 
     lastTime = now;
-    
     time += dt;
 
     updatePhysics(dt);
     draw();
     
-    // 画面外に出たら停止判定（簡易的）
-    let currentY;
-    if(!separated) {
-      currentY = oy - R * Math.cos(angle);
-    } else {
-      // 放物運動の現在位置Y
-      const t_dash = time - sepTime;
-      // 画面上のピクセル換算重力加速度: g_px = g * (ピクセルR / 実際のメートルR)
-      // ここでは R=5m と仮定して計算
-      const g_px = g * (R / 5.0);
-      currentY = sepPos.y + sepVel.y * t_dash + 0.5 * g_px * t_dash * t_dash; 
-    }
-
-    if (currentY > canvas.height + 20) { // 画面下少し過ぎたら停止
-       running = false;
-       document.getElementById('statusText').innerText = "状態: 落下完了";
-    } else {
+    if (running) { // updatePhysicsで停止していなければ継続
        animReq = requestAnimationFrame(loop);
     }
   }
 
   function updatePhysics(dt) {
-    // 分離条件: cos(θ) = 2/3 (約48.2度)
-    const sepAngle = Math.acos(2/3);
+    const sepAngle = Math.acos(2/3); // 分離角度
 
     if (!separated) {
       // --- 円運動フェーズ ---
-      
-      // エネルギー保存則から速度 v を計算
-      // v = √(2gR(1 - cosθ))
-      // ここでは R=5m と仮定
       const real_R = 5.0; 
       const v_real = Math.sqrt(2 * g * real_R * (1 - Math.cos(angle)));
-      
-      // 角速度 ω = v / R
       const angular_vel = v_real / real_R;
-
-      // 角度を更新 (θ = θ + ω * dt)
-      // ※vが0に近い初期は動きが遅いため、最低限の微小速度がないと進まないが、
-      // 初期角度0.005があるため自然に加速します。
       angle += angular_vel * dt;
 
-      // 分離角度を超えたかチェック
       if (angle >= sepAngle) {
          setupSeparation(sepAngle, time);
+         // ★修正点3: 離れた瞬間に停止
+         running = false; 
+         document.getElementById('statusText').innerText = "状態: 円筒から離れた瞬間に停止しました (抗力=0)";
+         draw(); // 最終状態を描画
+         return;
       }
-      
-      document.getElementById('statusText').innerText = "状態: 円筒面上を滑走中";
+      document.getElementById('statusText').innerText = "状態: 円筒面上を滑走中 (抗力が働いています)";
       
     } else {
-      // --- 放物運動フェーズ ---
-      document.getElementById('statusText').innerText = "状態: 放物運動 (抗力ゼロ)";
+      // --- 放物運動フェーズ（今回は使われませんが、一応残します）---
+      // 床への当たり判定
+      let currentY;
+      const t_dash = time - sepTime;
+      const g_px = g * (R / 5.0);
+      currentY = sepPos.y + sepVel.y * t_dash + 0.5 * g_px * t_dash * t_dash; 
+
+      if (currentY + 10 >= floorY) { // 物体の半径10pxを考慮
+          running = false;
+          document.getElementById('statusText').innerText = "状態: 床に落下しました";
+          draw();
+          return;
+      }
     }
   }
 
   function setupSeparation(sAngle, t) {
       separated = true;
-      angle = sAngle; // 角度を厳密に合わせる
+      angle = sAngle; 
       sepTime = t;
-      
-      // 分離位置 (Canvas座標)
-      sepPos = {
-        x: ox + R * Math.sin(sAngle),
-        y: oy - R * Math.cos(sAngle)
-      };
-
-      // 分離時の速度ベクトル計算
+      sepPos = { x: ox + R * Math.sin(sAngle), y: oy - R * Math.cos(sAngle) };
       const real_R = 5.0;
-      // 分離時の速さ v = √(2gR/3)
       const v_sep = Math.sqrt(2 * g * real_R / 3);
-      const v_px = v_sep * (R / real_R); // ピクセル単位に変換
-
-      // 速度の向きは接線方向
-      sepVel = {
-        x: v_px * Math.cos(sAngle),
-        y: v_px * Math.sin(sAngle) 
-      };
+      const v_px = v_sep * (R / real_R);
+      sepVel = { x: v_px * Math.cos(sAngle), y: v_px * Math.sin(sAngle) };
   }
 
   function draw() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    // 1. 円筒（半円）
+    // 床を描く
     ctx.beginPath();
-    ctx.arc(ox, oy, R, Math.PI, 0); 
+    ctx.moveTo(0, floorY);
+    ctx.lineTo(canvas.width, floorY);
+    ctx.strokeStyle = "#333";
+    ctx.lineWidth = 3;
+    ctx.stroke();
+    ctx.fillStyle = "#ddd"; // 床下の色
+    ctx.fillRect(0, floorY, canvas.width, canvas.height - floorY);
+
+
+    // ★修正点1: 完全な円筒を描く
+    ctx.beginPath();
+    ctx.arc(ox, oy, R, 0, Math.PI * 2); 
     ctx.fillStyle = "#e0e0e0";
     ctx.fill();
     ctx.strokeStyle = "#666";
     ctx.lineWidth = 2;
     ctx.stroke();
     
-    // 床
-    ctx.beginPath();
-    ctx.moveTo(0, oy);
-    ctx.lineTo(canvas.width, oy);
-    ctx.strokeStyle = "#333";
-    ctx.stroke();
+    // 円の中心O
+    ctx.fillStyle = "black";
+    ctx.beginPath(); ctx.arc(ox, oy, 3, 0, Math.PI*2); ctx.fill();
+    ctx.fillText("O", ox + 5, oy + 15);
 
-    // 2. 物体の位置計算
+    // 物体の位置計算
     let px, py;
-    let N_mag = 0; // 垂直抗力の大きさ
+    let N_mag = 0;
 
     if (!separated) {
       px = ox + R * Math.sin(angle);
       py = oy - R * Math.cos(angle);
-      
-      // 垂直抗力 N ∝ 3cosθ - 2
       const factor = 3 * Math.cos(angle) - 2;
       N_mag = Math.max(0, factor * 80); 
-      
     } else {
-      // 放物運動の位置計算
       const dt = time - sepTime;
       const g_px = g * (R / 5.0); 
-      
       px = sepPos.x + sepVel.x * dt;
       py = sepPos.y + sepVel.y * dt + 0.5 * g_px * dt * dt;
       N_mag = 0;
     }
 
-    // 3. ベクトル描画
-    // 重力 (青, 常に一定)
-    drawVector(px, py, 0, 50, "blue"); 
+    // ★修正点3: 角度θの表示 (点線と弧)
+    ctx.setLineDash([5, 5]); // 点線にする
+    ctx.strokeStyle = "#888";
+    ctx.lineWidth = 1;
+    
+    // 中心から真上の線 (P点方向)
+    ctx.beginPath(); ctx.moveTo(ox, oy); ctx.lineTo(ox, oy - R - 20); ctx.stroke();
+    ctx.fillText("P", ox - 5, oy - R - 25);
 
-    // 垂直抗力 (赤, だんだん小さくなる)
-    if (N_mag > 1) {
-       const nx = Math.sin(angle);
-       const ny = -Math.cos(angle);
-       drawVector(px, py, nx * N_mag, ny * N_mag, "red");
+    // 中心から物体への線
+    ctx.beginPath(); ctx.moveTo(ox, oy); ctx.lineTo(px, py); ctx.stroke();
+    
+    ctx.setLineDash([]); // 実線に戻す
+
+    // 角度の弧を描く
+    if (angle > 0.1) { // 角度が小さすぎるときは描かない
+        ctx.beginPath();
+        // 真上(-PI/2)から現在の角度まで
+        ctx.arc(ox, oy, R * 0.4, -Math.PI/2, -Math.PI/2 + angle);
+        ctx.strokeStyle = "black";
+        ctx.stroke();
+        // θの文字
+        ctx.font = "18px serif";
+        ctx.fillText("θ", ox + R*0.15, oy - R*0.45);
     }
 
-    // 4. 物体を描画
+    // ベクトル描画
+    drawVector(px, py, 0, 50, "blue"); // 重力
+    if (N_mag > 1) {
+       const nx = Math.sin(angle); const ny = -Math.cos(angle);
+       drawVector(px, py, nx * N_mag, ny * N_mag, "red"); // 垂直抗力
+    }
+
+    // 物体を描画
     ctx.beginPath();
     ctx.arc(px, py, 12, 0, Math.PI * 2);
-    ctx.fillStyle = "#ff9800"; // オレンジ
+    ctx.fillStyle = "#ff9800";
     ctx.fill();
     ctx.stroke();
     
-    // ガイド点S (分離点)
+    // ガイド点S
     const s_angle = Math.acos(2/3);
     const sx = ox + R * Math.sin(s_angle);
     const sy = oy - R * Math.cos(s_angle);
     ctx.fillStyle = "#999";
     ctx.beginPath(); ctx.arc(sx, sy, 4, 0, Math.PI*2); ctx.fill();
+    ctx.font = "16px Arial";
     ctx.fillText("S", sx + 10, sy - 5);
   }
 
-  // 矢印を描く関数
   function drawVector(x, y, vx, vy, color) {
-    ctx.beginPath();
-    ctx.moveTo(x, y);
-    ctx.lineTo(x + vx, y + vy);
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 3;
-    ctx.stroke();
-    
-    const headLen = 10;
-    const angle = Math.atan2(vy, vx);
+    ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + vx, y + vy);
+    ctx.strokeStyle = color; ctx.lineWidth = 3; ctx.stroke();
+    const headLen = 10; const angle = Math.atan2(vy, vx);
     ctx.beginPath();
     ctx.moveTo(x + vx, y + vy);
-    ctx.lineTo(x + vx - headLen * Math.cos(angle - Math.PI / 6), y + vy - headLen * Math.sin(angle - Math.PI / 6));
-    ctx.lineTo(x + vx - headLen * Math.cos(angle + Math.PI / 6), y + vy - headLen * Math.sin(angle + Math.PI / 6));
-    ctx.fillStyle = color;
-    ctx.fill();
+    ctx.lineTo(x + vx - headLen * Math.cos(angle - Math.PI/6), y + vy - headLen * Math.sin(angle - Math.PI/6));
+    ctx.lineTo(x + vx - headLen * Math.cos(angle + Math.PI/6), y + vy - headLen * Math.sin(angle + Math.PI/6));
+    ctx.fillStyle = color; ctx.fill();
   }
 </script>
-
 </body>
 </html>
-  `).setTitle('物理シミュレーション');
+  `).setTitle('物理シミュレーション v3');
 }
